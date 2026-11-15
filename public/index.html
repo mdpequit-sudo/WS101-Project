@@ -1,92 +1,146 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Clinic Patient Records</title>
-  <link rel="stylesheet" href="style.css">
-</head>
-<body>
-  <header class="top">
-    <h1>Clinic Patient Records</h1>
-    <p class="sub">Fictional data for classroom testing</p>
-  </header>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clinic Patient Records</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="top">
+      <h1>Clinic Patient Records</h1>
+      <p class="sub">Fictional data for classroom testing</p>
+    </header>
 
-  <main>
-    <section class="stats" aria-label="Summary">
-      <div class="stat"><span id="statTotal">0</span><label>Patients on file</label></div>
-      <div class="stat"><span id="statAge">–</span><label>Average age</label></div>
-      <div class="stat"><span id="statFemale">0</span><label>Female</label></div>
-      <div class="stat"><span id="statMale">0</span><label>Male</label></div>
-      <div class="stat"><span id="statOther">0</span><label>Other</label></div>
-    </section>
+    <main>
+      <section class="stats" aria-label="Summary">
+        <div class="stat">
+          <span id="statTotal">0</span><label>Patients on file</label>
+        </div>
+        <div class="stat">
+          <span id="statAge">–</span><label>Average age</label>
+        </div>
+        <div class="stat">
+          <span id="statFemale">0</span><label>Female</label>
+        </div>
+        <div class="stat"><span id="statMale">0</span><label>Male</label></div>
+        <div class="stat">
+          <span id="statOther">0</span><label>Other</label>
+        </div>
+      </section>
 
-    <section class="panel">
-      <div class="toolbar">
-        <input id="search" type="search" placeholder="Search patients by name" aria-label="Search patients by name">
-        <button id="addBtn" class="btn primary">Register patient</button>
-      </div>
+      <section class="panel">
+        <div class="toolbar">
+          <input
+            id="search"
+            type="search"
+            placeholder="Search patients by name"
+            aria-label="Search patients by name"
+          />
+          <button id="addBtn" class="btn primary">Register patient</button>
+        </div>
 
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th><th>Full name</th><th>Age</th><th>Gender</th>
-              <th>Contact number</th><th>Address</th><th class="actions-col">Actions</th>
-            </tr>
-          </thead>
-          <tbody id="rows"></tbody>
-        </table>
-      </div>
-      <p id="empty" class="empty" hidden></p>
-    </section>
-  </main>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Full name</th>
+                <th>Age</th>
+                <th>Gender</th>
+                <th>Contact number</th>
+                <th>Address</th>
+                <th class="actions-col">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+        <p id="empty" class="empty" hidden></p>
+      </section>
+    </main>
 
-  <dialog id="formDialog">
-    <form id="patientForm" novalidate>
-      <h2 id="formTitle">Register patient</h2>
-      <input type="hidden" id="patientId">
+    <dialog id="formDialog">
+      <form id="patientForm" novalidate>
+        <h2 id="formTitle">Register patient</h2>
+        <input type="hidden" id="patientId" />
 
-      <label>Full name
-        <input id="full_name" name="full_name" required autocomplete="off">
-      </label>
-      <div class="row">
-        <label>Age
-          <input id="age" name="age" type="number" min="0" max="130" required>
+        <label
+          >Full name
+          <input id="full_name" name="full_name" required autocomplete="off" />
         </label>
-        <label>Gender
-          <select id="gender" name="gender" required>
-            <option value="">Select</option>
-            <option>Female</option><option>Male</option><option>Other</option>
-          </select>
+        <div class="row">
+          <label
+            >Age
+            <input
+              id="age"
+              name="age"
+              type="number"
+              min="0"
+              max="130"
+              required
+            />
+          </label>
+          <label
+            >Gender
+            <select id="gender" name="gender" required>
+              <option value="">Select</option>
+              <option>Female</option>
+              <option>Male</option>
+              <option>Other</option>
+            </select>
+          </label>
+        </div>
+        <label
+          >Contact number
+          <input
+            id="contact_number"
+            name="contact_number"
+            type="tel"
+            required
+            autocomplete="off"
+          />
         </label>
-      </div>
-      <label>Contact number
-        <input id="contact_number" name="contact_number" type="tel" required autocomplete="off">
-      </label>
-      <label>Address
-        <textarea id="address" name="address" rows="2" required></textarea>
-      </label>
 
-      <ul id="formErrors" class="errors" hidden></ul>
+        <div class="address-field">
+          <label
+            >Address
+            <input
+              id="address"
+              name="address"
+              required
+              autocomplete="off"
+              placeholder="Start typing a street, barangay or city"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded="false"
+              aria-controls="addressSuggest"
+            />
+          </label>
+          <ul id="addressSuggest" class="suggest" role="listbox" hidden></ul>
+        </div>
 
+        <ul id="formErrors" class="errors" hidden></ul>
+
+        <div class="dialog-actions">
+          <button type="button" id="cancelBtn" class="btn">Cancel</button>
+          <button type="submit" id="saveBtn" class="btn primary">
+            Save patient
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="deleteDialog">
+      <h2>Delete patient record?</h2>
+      <p id="deleteText"></p>
       <div class="dialog-actions">
-        <button type="button" id="cancelBtn" class="btn">Cancel</button>
-        <button type="submit" id="saveBtn" class="btn primary">Save patient</button>
+        <button id="deleteCancel" class="btn">Keep record</button>
+        <button id="deleteConfirm" class="btn danger">Delete record</button>
       </div>
-    </form>
-  </dialog>
+    </dialog>
 
-  <dialog id="deleteDialog">
-    <h2>Delete patient record?</h2>
-    <p id="deleteText"></p>
-    <div class="dialog-actions">
-      <button id="deleteCancel" class="btn">Keep record</button>
-      <button id="deleteConfirm" class="btn danger">Delete record</button>
-    </div>
-  </dialog>
-
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="app.js"></script>
-</body>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="app.js"></script>
+  </body>
 </html>

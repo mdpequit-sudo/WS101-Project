@@ -1,111 +1,196 @@
-const $ = (id) => document.getElementById(id);
-const rowsEl = $('rows'), emptyEl = $('empty'), searchEl = $('search');
-const formDialog = $('formDialog'), deleteDialog = $('deleteDialog');
-let pendingDelete = null;
+require("dotenv").config();
+const express = require("express");
+const path = require("path");
+const { createClient } = require("@supabase/supabase-js");
 
-const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-function highlight(name, q) {
-  const safe = esc(name);
-  if (!q) return safe;
-  const re = new RegExp('(' + esc(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'ig');
-  return safe.replace(re, '<mark>$1</mark>');
+const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, PORT = 3000 } = process.env;
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env");
+  process.exit(1);
 }
 
-function toast(msg) {
-  const t = $('toast');
-  t.textContent = msg; t.classList.add('show');
-  clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => t.classList.remove('show'), 2400);
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { persistSession: false },
+});
+const TABLE = "patients";
+
+const app = express();
+app.use(express.json());
+app.use(express.static(path.join(__dirname, "public")));
+
+function validate(body) {
+  const errors = [];
+  const full_name = String(body.full_name || "").trim();
+  const contact_number = String(body.contact_number || "").trim();
+  const address = String(body.address || "").trim();
+  const gender = String(body.gender || "").trim();
+  const age = Number(body.age);
+
+  if (!full_name) errors.push("Full name is required.");
+  if (!Number.isInteger(age) || age < 0 || age > 130)
+    errors.push("Age must be a whole number from 0 to 130.");
+  if (!["Male", "Female", "Other"].includes(gender))
+    errors.push("Choose a gender.");
+  if (!/^[0-9+\-\s()]{7,20}$/.test(contact_number))
+    errors.push("Contact number must be 7–20 digits (numbers, +, -, spaces).");
+  if (!address) errors.push("Address is required.");
+  return { errors, data: { full_name, age, gender, contact_number, address } };
 }
 
-async function api(url, options = {}) {
-  const res = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...options });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw body.errors || ['Something went wrong. Try again.'];
-  return body;
-}
+const wrap = (fn) => (req, res) =>
+  fn(req, res).catch((err) => {
+    console.error(err);
+    res
+      .status(500)
+      .json({ errors: ["Database error. Check the server console."] });
+  });
 
-async function updateStats() {
-  const all = await api('/api/patients');
-  $('statTotal').textContent = all.length;
-  $('statAge').textContent = all.length ? Math.round(all.reduce((s, p) => s + p.age, 0) / all.length) : '–';
-  for (const g of ['Female', 'Male', 'Other']) {
-    $('stat' + g).textContent = all.filter((p) => p.gender === g).length;
+const validId = (req, res) => {
+  if (!/^\d+$/.test(req.params.id)) {
+    res.status(400).json({ errors: ["Invalid patient ID."] });
+    return false;
   }
+  return true;
+};
+
+// List all, or search by name (?search=)
+app.get(
+  "/api/patients",
+  wrap(async (req, res) => {
+    const q = String(req.query.search || "")
+      .trim()
+      .replace(/[%_\\]/g, "\\$&");
+    let query = supabase.from(TABLE).select("*").order("full_name");
+    if (q) query = query.ilike("full_name", `%${q}%`);
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json(data);
+  }),
+);
+
+// Get one
+app.get(
+  "/api/patients/:id",
+  wrap(async (req, res) => {
+    if (!validId(req, res)) return;
+    const { data, error } = await supabase
+      .from(TABLE)
+      .select("*")
+      .eq("patient_id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ errors: ["Patient not found."] });
+    res.json(data);
+  }),
+);
+
+// Register
+app.post(
+  "/api/patients",
+  wrap(async (req, res) => {
+    const { errors, data: row } = validate(req.body);
+    if (errors.length) return res.status(400).json({ errors });
+    const { data, error } = await supabase
+      .from(TABLE)
+      .insert(row)
+      .select()
+      .single();
+    if (error) throw error;
+    res.status(201).json(data);
+  }),
+);
+
+// Edit
+app.put(
+  "/api/patients/:id",
+  wrap(async (req, res) => {
+    if (!validId(req, res)) return;
+    const { errors, data: row } = validate(req.body);
+    if (errors.length) return res.status(400).json({ errors });
+    const { data, error } = await supabase
+      .from(TABLE)
+      .update(row)
+      .eq("patient_id", req.params.id)
+      .select()
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ errors: ["Patient not found."] });
+    res.json(data);
+  }),
+);
+
+// Delete
+app.delete(
+  "/api/patients/:id",
+  wrap(async (req, res) => {
+    if (!validId(req, res)) return;
+    const { data, error } = await supabase
+      .from(TABLE)
+      .delete()
+      .eq("patient_id", req.params.id)
+      .select();
+    if (error) throw error;
+    if (!data.length)
+      return res.status(404).json({ errors: ["Patient not found."] });
+    res.json({ deleted: true });
+  }),
+);
+
+// ---------- Address suggestions (OpenStreetMap data via Photon) ----------
+const placeCache = new Map();
+
+function placeLabel(p) {
+  const street = [p.street, p.housenumber].filter(Boolean).join(" ");
+  const parts = [
+    p.name,
+    street,
+    p.district,
+    p.city || p.county,
+    p.state,
+  ].filter(Boolean);
+  const seen = new Set();
+  return parts
+    .filter((x) => !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase()))
+    .join(", ");
 }
 
-async function load() {
-  const q = searchEl.value.trim();
-  const patients = await api('/api/patients?search=' + encodeURIComponent(q));
-  rowsEl.innerHTML = patients.map((p) => `
-    <tr>
-      <td class="id">${p.patient_id}</td>
-      <td class="name">${highlight(p.full_name, q)}</td>
-      <td class="num">${p.age}</td>
-      <td>${esc(p.gender)}</td>
-      <td>${esc(p.contact_number)}</td>
-      <td>${esc(p.address)}</td>
-      <td><div class="actions">
-        <button class="btn small" data-edit="${p.patient_id}">Edit</button>
-        <button class="btn small danger-text" data-delete="${p.patient_id}" data-name="${esc(p.full_name)}">Delete</button>
-      </div></td>
-    </tr>`).join('');
-  emptyEl.hidden = patients.length > 0;
-  emptyEl.textContent = q ? `No patients match “${q}”. Check the spelling or clear the search.` : 'No patients yet. Select “Register patient” to add the first one.';
-  updateStats();
-}
+app.get("/api/places", async (req, res) => {
+  const q = String(req.query.q || "")
+    .trim()
+    .slice(0, 100);
+  if (q.length < 2) return res.json([]);
 
-function openForm(patient) {
-  $('patientForm').reset();
-  $('formErrors').hidden = true;
-  $('formTitle').textContent = patient ? 'Edit patient' : 'Register patient';
-  $('patientId').value = patient ? patient.patient_id : '';
-  if (patient) for (const k of ['full_name', 'age', 'gender', 'contact_number', 'address']) $(k).value = patient[k];
-  formDialog.showModal();
-  $('full_name').focus();
-}
+  const key = q.toLowerCase();
+  if (placeCache.has(key)) return res.json(placeCache.get(key));
 
-$('addBtn').onclick = () => openForm();
-$('cancelBtn').onclick = () => formDialog.close();
-
-$('patientForm').onsubmit = async (e) => {
-  e.preventDefault();
-  const id = $('patientId').value;
-  const payload = {};
-  for (const k of ['full_name', 'age', 'gender', 'contact_number', 'address']) payload[k] = $(k).value;
   try {
-    await api(id ? '/api/patients/' + id : '/api/patients', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) });
-    formDialog.close();
-    toast(id ? 'Patient updated' : 'Patient registered');
-    load();
-  } catch (errors) {
-    const ul = $('formErrors');
-    ul.innerHTML = errors.map((m) => `<li>${esc(m)}</li>`).join('');
-    ul.hidden = false;
+    const url = new URL("https://photon.komoot.io/api/");
+    url.searchParams.set("q", q);
+    url.searchParams.set("limit", "6");
+    url.searchParams.set("lang", "en");
+    url.searchParams.set("lat", "7.19"); // bias toward Mindanao
+    url.searchParams.set("lon", "125.46");
+    url.searchParams.set("bbox", "116.9,4.5,126.7,21.2"); // Philippines only
+
+    const r = await fetch(url, { signal: AbortSignal.timeout(4000) });
+    if (!r.ok) return res.json([]);
+    const json = await r.json();
+
+    const labels = [
+      ...new Set(
+        (json.features || [])
+          .map((f) => placeLabel(f.properties))
+          .filter(Boolean),
+      ),
+    ];
+    if (placeCache.size > 300) placeCache.clear();
+    placeCache.set(key, labels);
+    res.json(labels);
+  } catch (err) {
+    res.json([]); // if the service is down, typing the address by hand still works
   }
-};
+});
 
-rowsEl.onclick = async (e) => {
-  const edit = e.target.closest('[data-edit]');
-  const del = e.target.closest('[data-delete]');
-  if (edit) openForm(await api('/api/patients/' + edit.dataset.edit));
-  if (del) {
-    pendingDelete = del.dataset.delete;
-    $('deleteText').textContent = `${del.dataset.name} will be removed permanently.`;
-    deleteDialog.showModal();
-  }
-};
-
-$('deleteCancel').onclick = () => deleteDialog.close();
-$('deleteConfirm').onclick = async () => {
-  await api('/api/patients/' + pendingDelete, { method: 'DELETE' });
-  deleteDialog.close();
-  toast('Patient deleted');
-  load();
-};
-
-let timer;
-searchEl.oninput = () => { clearTimeout(timer); timer = setTimeout(load, 200); };
-
-load();
+app.listen(PORT, () =>
+  console.log(`Clinic Patient Records running at http://localhost:${PORT}`),
+);
