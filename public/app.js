@@ -1,196 +1,238 @@
-require("dotenv").config();
-const express = require("express");
-const path = require("path");
-const { createClient } = require("@supabase/supabase-js");
+const $ = (id) => document.getElementById(id);
+const rowsEl = $("rows"),
+  emptyEl = $("empty"),
+  searchEl = $("search");
+const formDialog = $("formDialog"),
+  deleteDialog = $("deleteDialog");
+let pendingDelete = null;
 
-const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, PORT = 3000 } = process.env;
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env");
-  process.exit(1);
+const esc = (s) =>
+  String(s).replace(
+    /[&<>"']/g,
+    (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        c
+      ],
+  );
+
+function highlight(name, q) {
+  const safe = esc(name);
+  if (!q) return safe;
+  const re = new RegExp(
+    "(" + esc(q).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")",
+    "ig",
+  );
+  return safe.replace(re, "<mark>$1</mark>");
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { persistSession: false },
-});
-const TABLE = "patients";
-
-const app = express();
-app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
-
-function validate(body) {
-  const errors = [];
-  const full_name = String(body.full_name || "").trim();
-  const contact_number = String(body.contact_number || "").trim();
-  const address = String(body.address || "").trim();
-  const gender = String(body.gender || "").trim();
-  const age = Number(body.age);
-
-  if (!full_name) errors.push("Full name is required.");
-  if (!Number.isInteger(age) || age < 0 || age > 130)
-    errors.push("Age must be a whole number from 0 to 130.");
-  if (!["Male", "Female", "Other"].includes(gender))
-    errors.push("Choose a gender.");
-  if (!/^[0-9+\-\s()]{7,20}$/.test(contact_number))
-    errors.push("Contact number must be 7–20 digits (numbers, +, -, spaces).");
-  if (!address) errors.push("Address is required.");
-  return { errors, data: { full_name, age, gender, contact_number, address } };
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => t.classList.remove("show"), 2400);
 }
 
-const wrap = (fn) => (req, res) =>
-  fn(req, res).catch((err) => {
-    console.error(err);
-    res
-      .status(500)
-      .json({ errors: ["Database error. Check the server console."] });
+async function api(url, options = {}) {
+  const res = await fetch(url, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
   });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw body.errors || ["Something went wrong. Try again."];
+  return body;
+}
 
-const validId = (req, res) => {
-  if (!/^\d+$/.test(req.params.id)) {
-    res.status(400).json({ errors: ["Invalid patient ID."] });
-    return false;
+async function updateStats() {
+  const all = await api("/api/patients");
+  $("statTotal").textContent = all.length;
+  $("statAge").textContent = all.length
+    ? Math.round(all.reduce((s, p) => s + p.age, 0) / all.length)
+    : "–";
+  for (const g of ["Female", "Male", "Other"]) {
+    $("stat" + g).textContent = all.filter((p) => p.gender === g).length;
   }
-  return true;
+}
+
+async function load() {
+  const q = searchEl.value.trim();
+  const patients = await api("/api/patients?search=" + encodeURIComponent(q));
+  rowsEl.innerHTML = patients
+    .map(
+      (p) => `
+    <tr>
+      <td class="id">${p.patient_id}</td>
+      <td class="name">${highlight(p.full_name, q)}</td>
+      <td class="num">${p.age}</td>
+      <td>${esc(p.gender)}</td>
+      <td>${esc(p.contact_number)}</td>
+      <td>${esc(p.address)}</td>
+      <td><div class="actions">
+        <button class="btn small" data-edit="${p.patient_id}">Edit</button>
+        <button class="btn small danger-text" data-delete="${p.patient_id}" data-name="${esc(p.full_name)}">Delete</button>
+      </div></td>
+    </tr>`,
+    )
+    .join("");
+  emptyEl.hidden = patients.length > 0;
+  emptyEl.textContent = q
+    ? `No patients match “${q}”. Check the spelling or clear the search.`
+    : "No patients yet. Select “Register patient” to add the first one.";
+  updateStats();
+}
+
+function openForm(patient) {
+  $("patientForm").reset();
+  $("formErrors").hidden = true;
+  $("formTitle").textContent = patient ? "Edit patient" : "Register patient";
+  $("patientId").value = patient ? patient.patient_id : "";
+  if (patient)
+    for (const k of ["full_name", "age", "gender", "contact_number", "address"])
+      $(k).value = patient[k];
+  formDialog.showModal();
+  $("full_name").focus();
+}
+
+$("addBtn").onclick = () => openForm();
+$("cancelBtn").onclick = () => formDialog.close();
+
+$("patientForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const id = $("patientId").value;
+  const payload = {};
+  for (const k of ["full_name", "age", "gender", "contact_number", "address"])
+    payload[k] = $(k).value;
+  try {
+    await api(id ? "/api/patients/" + id : "/api/patients", {
+      method: id ? "PUT" : "POST",
+      body: JSON.stringify(payload),
+    });
+    formDialog.close();
+    toast(id ? "Patient updated" : "Patient registered");
+    load();
+  } catch (errors) {
+    const ul = $("formErrors");
+    ul.innerHTML = errors.map((m) => `<li>${esc(m)}</li>`).join("");
+    ul.hidden = false;
+  }
 };
 
-// List all, or search by name (?search=)
-app.get(
-  "/api/patients",
-  wrap(async (req, res) => {
-    const q = String(req.query.search || "")
-      .trim()
-      .replace(/[%_\\]/g, "\\$&");
-    let query = supabase.from(TABLE).select("*").order("full_name");
-    if (q) query = query.ilike("full_name", `%${q}%`);
-    const { data, error } = await query;
-    if (error) throw error;
-    res.json(data);
-  }),
-);
+rowsEl.onclick = async (e) => {
+  const edit = e.target.closest("[data-edit]");
+  const del = e.target.closest("[data-delete]");
+  if (edit) openForm(await api("/api/patients/" + edit.dataset.edit));
+  if (del) {
+    pendingDelete = del.dataset.delete;
+    $("deleteText").textContent =
+      `${del.dataset.name} will be removed permanently.`;
+    deleteDialog.showModal();
+  }
+};
 
-// Get one
-app.get(
-  "/api/patients/:id",
-  wrap(async (req, res) => {
-    if (!validId(req, res)) return;
-    const { data, error } = await supabase
-      .from(TABLE)
-      .select("*")
-      .eq("patient_id", req.params.id)
-      .maybeSingle();
-    if (error) throw error;
-    if (!data) return res.status(404).json({ errors: ["Patient not found."] });
-    res.json(data);
-  }),
-);
+$("deleteCancel").onclick = () => deleteDialog.close();
+$("deleteConfirm").onclick = async () => {
+  await api("/api/patients/" + pendingDelete, { method: "DELETE" });
+  deleteDialog.close();
+  toast("Patient deleted");
+  load();
+};
 
-// Register
-app.post(
-  "/api/patients",
-  wrap(async (req, res) => {
-    const { errors, data: row } = validate(req.body);
-    if (errors.length) return res.status(400).json({ errors });
-    const { data, error } = await supabase
-      .from(TABLE)
-      .insert(row)
-      .select()
-      .single();
-    if (error) throw error;
-    res.status(201).json(data);
-  }),
-);
+let timer;
+searchEl.oninput = () => {
+  clearTimeout(timer);
+  timer = setTimeout(load, 200);
+};
 
-// Edit
-app.put(
-  "/api/patients/:id",
-  wrap(async (req, res) => {
-    if (!validId(req, res)) return;
-    const { errors, data: row } = validate(req.body);
-    if (errors.length) return res.status(400).json({ errors });
-    const { data, error } = await supabase
-      .from(TABLE)
-      .update(row)
-      .eq("patient_id", req.params.id)
-      .select()
-      .maybeSingle();
-    if (error) throw error;
-    if (!data) return res.status(404).json({ errors: ["Patient not found."] });
-    res.json(data);
-  }),
-);
+load();
 
-// Delete
-app.delete(
-  "/api/patients/:id",
-  wrap(async (req, res) => {
-    if (!validId(req, res)) return;
-    const { data, error } = await supabase
-      .from(TABLE)
-      .delete()
-      .eq("patient_id", req.params.id)
-      .select();
-    if (error) throw error;
-    if (!data.length)
-      return res.status(404).json({ errors: ["Patient not found."] });
-    res.json({ deleted: true });
-  }),
-);
+// ---------- Address suggestions ----------
+const addressEl = $("address"),
+  suggestEl = $("addressSuggest");
+let suggestTimer,
+  suggestSeq = 0,
+  suggestions = [],
+  activeIdx = -1;
 
-// ---------- Address suggestions (OpenStreetMap data via Photon) ----------
-const placeCache = new Map();
-
-function placeLabel(p) {
-  const street = [p.street, p.housenumber].filter(Boolean).join(" ");
-  const parts = [
-    p.name,
-    street,
-    p.district,
-    p.city || p.county,
-    p.state,
-  ].filter(Boolean);
-  const seen = new Set();
-  return parts
-    .filter((x) => !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase()))
-    .join(", ");
+function hideSuggest() {
+  suggestSeq++;
+  suggestEl.hidden = true;
+  suggestEl.innerHTML = "";
+  suggestions = [];
+  activeIdx = -1;
+  addressEl.setAttribute("aria-expanded", "false");
+  addressEl.removeAttribute("aria-activedescendant");
 }
 
-app.get("/api/places", async (req, res) => {
-  const q = String(req.query.q || "")
-    .trim()
-    .slice(0, 100);
-  if (q.length < 2) return res.json([]);
+function showSuggest(list) {
+  if (!list.length) return hideSuggest();
+  suggestions = list;
+  activeIdx = -1;
+  suggestEl.innerHTML =
+    list
+      .map(
+        (label, i) =>
+          `<li role="option" id="sug-${i}" data-i="${i}">${esc(label)}</li>`,
+      )
+      .join("") +
+    '<li class="suggest-credit" aria-hidden="true">Suggestions from OpenStreetMap</li>';
+  suggestEl.hidden = false;
+  addressEl.setAttribute("aria-expanded", "true");
+}
 
-  const key = q.toLowerCase();
-  if (placeCache.has(key)) return res.json(placeCache.get(key));
+function setActive(i) {
+  const items = suggestEl.querySelectorAll('[role="option"]');
+  items.forEach((el, n) => el.classList.toggle("active", n === i));
+  activeIdx = i;
+  addressEl.setAttribute("aria-activedescendant", "sug-" + i);
+  items[i].scrollIntoView({ block: "nearest" });
+}
 
-  try {
-    const url = new URL("https://photon.komoot.io/api/");
-    url.searchParams.set("q", q);
-    url.searchParams.set("limit", "6");
-    url.searchParams.set("lang", "en");
-    url.searchParams.set("lat", "7.19"); // bias toward Mindanao
-    url.searchParams.set("lon", "125.46");
-    url.searchParams.set("bbox", "116.9,4.5,126.7,21.2"); // Philippines only
+function pickSuggestion(i) {
+  addressEl.value = suggestions[i];
+  hideSuggest();
+  addressEl.focus();
+}
 
-    const r = await fetch(url, { signal: AbortSignal.timeout(4000) });
-    if (!r.ok) return res.json([]);
-    const json = await r.json();
+addressEl.addEventListener("input", () => {
+  clearTimeout(suggestTimer);
+  const q = addressEl.value.trim();
+  if (q.length < 2) return hideSuggest();
+  suggestTimer = setTimeout(async () => {
+    const seq = ++suggestSeq;
+    try {
+      const list = await api("/api/places?q=" + encodeURIComponent(q));
+      if (seq === suggestSeq && document.activeElement === addressEl)
+        showSuggest(list);
+    } catch {
+      /* typing the address by hand still works */
+    }
+  }, 300);
+});
 
-    const labels = [
-      ...new Set(
-        (json.features || [])
-          .map((f) => placeLabel(f.properties))
-          .filter(Boolean),
-      ),
-    ];
-    if (placeCache.size > 300) placeCache.clear();
-    placeCache.set(key, labels);
-    res.json(labels);
-  } catch (err) {
-    res.json([]); // if the service is down, typing the address by hand still works
+addressEl.addEventListener("keydown", (e) => {
+  if (suggestEl.hidden) return;
+  const n = suggestions.length;
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    setActive((activeIdx + 1) % n);
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    setActive(activeIdx <= 0 ? n - 1 : activeIdx - 1);
+  } else if (e.key === "Enter" && activeIdx >= 0) {
+    e.preventDefault();
+    pickSuggestion(activeIdx);
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    hideSuggest();
   }
 });
 
-app.listen(PORT, () =>
-  console.log(`Clinic Patient Records running at http://localhost:${PORT}`),
-);
+suggestEl.addEventListener("mousedown", (e) => {
+  const li = e.target.closest("[data-i]");
+  if (!li) return;
+  e.preventDefault();
+  pickSuggestion(Number(li.dataset.i));
+});
+
+addressEl.addEventListener("blur", hideSuggest);
+formDialog.addEventListener("close", hideSuggest);
