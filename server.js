@@ -53,14 +53,17 @@ const validId = (req, res) => {
   return true;
 };
 
-// List all, or search by name (?search=)
+// List all (sorted by Patient ID), or search by name (?search=)
 app.get(
   "/api/patients",
   wrap(async (req, res) => {
     const q = String(req.query.search || "")
       .trim()
       .replace(/[%_\\]/g, "\\$&");
-    let query = supabase.from(TABLE).select("*").order("full_name");
+    let query = supabase
+      .from(TABLE)
+      .select("*")
+      .order("patient_id", { ascending: true });
     if (q) query = query.ilike("full_name", `%${q}%`);
     const { data, error } = await query;
     if (error) throw error;
